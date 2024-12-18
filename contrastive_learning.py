@@ -15,15 +15,7 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
-
-CATEGORIES = "lvl2"
-SQUARE_SIZE = 1000
-CHECK_INS = True
-NEIGHBORS = False
-
-ANALYSIS = True
-OPTIMIZE = True
-
+import argparse
 
 class GridDataset(Dataset):
     """Torch Dataset to create dataloaders"""
@@ -265,7 +257,7 @@ def parameter_search(train_data, val_data, loss_fn, input_dim):
     """Hyperparameter search"""
     batch_sizes = [64, 128, 256]
     embedding_dims = [16, 32, 64]
-    network_structures = [(64, 64), (128, 128), (256, 256)]
+    network_structures = [(128, 128, 128), (128, 128), (256, 128, 64), (128, 64), (256, 128)]
     n_epochs = 500
     learning_rates = [1e-2, 1e-3, 1e-4]
 
@@ -326,11 +318,11 @@ def parameter_search(train_data, val_data, loss_fn, input_dim):
         for encoder_layers in network_structures
         for learning_rate in learning_rates
     )
-    results = pd.DataFrame(results)
+    results = pd.DataFrame(results).sort_values("score", ascending=False)
     print(results)
 
 
-def main():
+def main(categories, square_size, check_ins, neighbors, analysis, optimize):
     """Main function"""
 
     batch_size = 128
@@ -345,7 +337,7 @@ def main():
 
     # Load data
     data = pd.read_csv(
-        f"data/squares_{CATEGORIES}_cats_{SQUARE_SIZE}m{'_neighbors' if NEIGHBORS else ''}{'_checkins' if CHECK_INS else ''}.csv"
+        f"data/squares_{categories}_cats_{square_size}m{'_neighbors' if neighbors else ''}{'_checkins' if check_ins else ''}.csv"
     )
     data = data.loc[:, data.columns[6:]]
 
@@ -358,7 +350,7 @@ def main():
     val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
 
-    if OPTIMIZE:
+    if optimize:
         parameter_search(train_data, val_data, loss_fn, input_dim=len(data.columns) - 1)
         return
 
@@ -390,7 +382,7 @@ def main():
     print(classification_report(labels.numpy(), predictions))
     print(f1_score(labels.numpy(), predictions, average="macro"))
 
-    if ANALYSIS:
+    if analysis:
         label_mapping = full_loader.dataset.label_mapping.keys()
         tsne_analysis(test_loader, encoder, label_mapping)
         confusion_matrix(predictions, labels, label_mapping)
@@ -398,4 +390,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    
+    parser = argparse.ArgumentParser(description="Contrastive Learning for Grid Embeddings")
+    parser.add_argument("--categories", "-c", type=str, default="handpicked", help="Categories for the dataset")
+    parser.add_argument("--square_size", "-s", type=int, default=500, help="Square size for the dataset")
+    parser.add_argument("--check_ins", "-ci", action="store_true", help="Include check-ins in the dataset")
+    parser.add_argument("--neighbors", "-n", action="store_true", help="Include neighbors in the dataset")
+    parser.add_argument("--analysis", "-a", action="store_true", help="Perform analysis after training")
+    parser.add_argument("--optimize", "-o", action="store_true", help="Perform hyperparameter optimization")
+    args = parser.parse_args()
+
+    main(args.categories, args.square_size, args.check_ins, args.neighbors, args.analysis, args.optimize)
