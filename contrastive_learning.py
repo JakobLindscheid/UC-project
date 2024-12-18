@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 from joblib import Parallel, delayed
+import argparse
 
 from sklearn.manifold import TSNE
 from sklearn.svm import LinearSVC
@@ -15,7 +16,6 @@ import torch
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
-import argparse
 
 class GridDataset(Dataset):
     """Torch Dataset to create dataloaders"""
