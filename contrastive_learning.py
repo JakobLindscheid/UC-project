@@ -30,7 +30,7 @@ class GridDataset(Dataset):
         self.label_mapping = {
             label: i for i, label in enumerate(np.unique(self.labels))
         }
-        self.labels = np.array([self.label_mapping[label] for label in self.labels])
+        self.labels = torch.tensor([self.label_mapping[label] for label in self.labels])
 
     def __len__(self):
         return len(self.data)
@@ -265,50 +265,49 @@ def parameter_search(train_data, val_data, loss_fn, input_dim):
         print(
             f"Training with batch_size={batch_size}, embedding_dim={embedding_dim}, encoder_layers={encoder_layers}, learning_rate={learning_rate}"
         )
-        scores = []
-        for _ in range(5):
-            train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
-            val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
+        
+        train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+        val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
 
-            encoder = train_encoder(
-                train_loader,
-                val_loader,
-                loss_fn,
-                input_dim=input_dim,
-                embedding_dim=embedding_dim,
-                encoder_layers=encoder_layers,
-                n_epochs=n_epochs,
-                learning_rate=learning_rate,
-                verbose=False,
-            )
+        encoder = train_encoder(
+            train_loader,
+            val_loader,
+            loss_fn,
+            input_dim=input_dim,
+            embedding_dim=embedding_dim,
+            encoder_layers=encoder_layers,
+            n_epochs=n_epochs,
+            learning_rate=learning_rate,
+            verbose=False,
+        )
 
-            with torch.no_grad():
-                train_embeddings = torch.tensor([])
-                train_labels = torch.tensor([])
-                val_embeddings = torch.tensor([])
-                val_labels = torch.tensor([])
-                for batch_data, batch_labels in train_loader:
-                    train_embeddings = torch.cat(
-                        (train_embeddings, encoder(batch_data))
-                    )
-                    train_labels = torch.cat((train_labels, batch_labels))
-                for batch_data, batch_labels in val_loader:
-                    val_embeddings = torch.cat((val_embeddings, encoder(batch_data)))
-                    val_labels = torch.cat((val_labels, batch_labels))
+        with torch.no_grad():
+            train_embeddings = torch.tensor([])
+            train_labels = torch.tensor([])
+            val_embeddings = torch.tensor([])
+            val_labels = torch.tensor([])
+            for batch_data, batch_labels in train_loader:
+                train_embeddings = torch.cat(
+                    (train_embeddings, encoder(batch_data))
+                )
+                train_labels = torch.cat((train_labels, batch_labels))
+            for batch_data, batch_labels in val_loader:
+                val_embeddings = torch.cat((val_embeddings, encoder(batch_data)))
+                val_labels = torch.cat((val_labels, batch_labels))
 
-            # SVM classifier
-            svm_classifier = LinearSVC(class_weight="balanced")
-            svm_classifier.fit(train_embeddings.detach().numpy(), train_labels.numpy())
+        # SVM classifier
+        svm_classifier = LinearSVC(class_weight="balanced")
+        svm_classifier.fit(train_embeddings.detach().numpy(), train_labels.numpy())
 
-            predictions = svm_classifier.predict(val_embeddings.detach().numpy())
-            scores.append(f1_score(val_labels.numpy(), predictions, average="macro"))
+        predictions = svm_classifier.predict(val_embeddings.detach().numpy())
+        score = f1_score(val_labels.numpy(), predictions, average="macro")
 
         return {
             "batch_size": batch_size,
             "embedding_dim": embedding_dim,
             "encoder_layers": encoder_layers,
             "learning_rate": learning_rate,
-            "score": np.mean(scores),
+            "score": score,
         }
 
     results = Parallel(n_jobs=-1)(
