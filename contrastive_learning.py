@@ -1,17 +1,17 @@
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from joblib import Parallel, delayed
 
 from sklearn.manifold import TSNE
 from sklearn.svm import LinearSVC
 from sklearn.metrics import classification_report, f1_score
-from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
+from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib.pyplot as plt
 
 import torch
 from torch import nn
-import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, TensorDataset
+from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 CATEGORIES = "lvl2"
@@ -20,6 +20,7 @@ CHECK_INS = True
 NEIGHBORS = False
 
 ANALYSIS = True
+OPTIMIZE = True
 
 """ Torch Dataset to create dataloaders"""
 class GridDataset(Dataset):
@@ -152,8 +153,6 @@ def similarities(embeddings, labels, label_mapping):
 
     # Compute the cosine similarity matrix
     similarity_matrix = cosine_similarity(avg_emb)
-    # Compute the Euclidean distance matrix
-    # similarity_matrix = 1-euclidean_distances(avg_emb)
 
     # Create a heatmap
     plt.figure(figsize=(10, 8))
@@ -164,14 +163,15 @@ def similarities(embeddings, labels, label_mapping):
     plt.title('Pairwise Similarities of average embeddings')
     plt.show()
 
-def train_encoder(train_loader, val_loader, loss_fn, input_dim, embedding_dim=32, encoder_layers=(128, 128, 128), n_epochs=500, learning_rate=1e-3):
+def train_encoder(train_loader, val_loader, loss_fn, input_dim, embedding_dim=32, encoder_layers=(128, 128, 128), n_epochs=500, learning_rate=1e-3, verbose=True):
     
     encoder = Encoder(input_dim=input_dim, embedding_dim=embedding_dim, layers=encoder_layers)
     
     optimizer = torch.optim.Adam(encoder.parameters(), lr=learning_rate)
 
-    writer = SummaryWriter()
-    pbar = tqdm(total=n_epochs)
+    if verbose:
+        writer = SummaryWriter()
+        pbar = tqdm(total=n_epochs)
     try:
         for epoch in range(n_epochs):
             encoder.train()
@@ -190,22 +190,86 @@ def train_encoder(train_loader, val_loader, loss_fn, input_dim, embedding_dim=32
                 loss.backward()
                 optimizer.step()
 
-            # val loss
-            encoder.eval()
-            val_loss = 0.0
-            with torch.no_grad():
-                for batch_data, batch_labels in val_loader:
-                    output = encoder(batch_data)
-                    val_loss += loss_fn(output, batch_labels).item()
-            writer.add_scalar("encoder/Loss/train", epoch_loss / len(train_loader), epoch)
-            writer.add_scalar("encoder/Loss/val", val_loss / len(val_loader), epoch)
-            pbar.update(1)
-            pbar.set_description(f"Loss: {round(epoch_loss / len(train_loader),3)}")
+            if verbose:
+                # val loss
+                encoder.eval()
+                val_loss = 0.0
+                with torch.no_grad():
+                    for batch_data, batch_labels in val_loader:
+                        output = encoder(batch_data)
+                        val_loss += loss_fn(output, batch_labels).item()
+                writer.add_scalar("encoder/Loss/train", epoch_loss / len(train_loader), epoch)
+                writer.add_scalar("encoder/Loss/val", val_loss / len(val_loader), epoch)
+                pbar.update(1)
+                pbar.set_description(f"Loss: {round(epoch_loss / len(train_loader),3)}")
     finally:
-        pbar.close()
-        writer.close()
+        if verbose:
+            pbar.close()
+            writer.close()
 
     return encoder
+
+def parameter_search(train_data, val_data, loss_fn, input_dim):
+    batch_sizes = [64, 128, 256]
+    embedding_dims = [16, 32, 64]
+    network_structures = [(64, 64), (128, 128), (256, 256)]
+    n_epochs = 500
+    learning_rates = [1e-2, 1e-3, 1e-4]
+
+    def eval_params(batch_size, embedding_dim, encoder_layers, learning_rate):
+        print(f"Training with batch_size={batch_size}, embedding_dim={embedding_dim}, encoder_layers={encoder_layers}, learning_rate={learning_rate}")
+        scores = []
+        for _ in range(5):
+            train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
+            val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
+
+            encoder = train_encoder(
+                train_loader, 
+                val_loader,
+                loss_fn, 
+                input_dim=input_dim,
+                embedding_dim=embedding_dim,
+                encoder_layers=encoder_layers,
+                n_epochs=n_epochs,
+                learning_rate=learning_rate,
+                verbose=False
+            )
+
+            with torch.no_grad():
+                train_embeddings = torch.tensor([])
+                train_labels = torch.tensor([])
+                val_embeddings = torch.tensor([])
+                val_labels = torch.tensor([])
+                for batch_data, batch_labels in train_loader:
+                    train_embeddings = torch.cat((train_embeddings, encoder(batch_data)))
+                    train_labels = torch.cat((train_labels, batch_labels))
+                for batch_data, batch_labels in val_loader:
+                    val_embeddings = torch.cat((val_embeddings, encoder(batch_data)))
+                    val_labels = torch.cat((val_labels, batch_labels))
+
+            # SVM classifier
+            svm_classifier = LinearSVC(class_weight='balanced')
+            svm_classifier.fit(train_embeddings.detach().numpy(), train_labels.numpy())
+
+            predictions = svm_classifier.predict(val_embeddings.detach().numpy())
+            scores.append(f1_score(val_labels.numpy(), predictions, average='macro'))
+
+        return {
+            "batch_size": batch_size,
+            "embedding_dim": embedding_dim,
+            "encoder_layers": encoder_layers,
+            "learning_rate": learning_rate,
+            "score": np.mean(scores)
+        }
+    
+    results = Parallel(n_jobs=-1)(delayed(eval_params)(batch_size, embedding_dim, encoder_layers, learning_rate) 
+                                  for batch_size in batch_sizes 
+                                  for embedding_dim in embedding_dims 
+                                  for encoder_layers in network_structures 
+                                  for learning_rate in learning_rates
+                                  )
+    results = pd.DataFrame(results)
+    print(results)
 
 def main():
 
@@ -230,6 +294,9 @@ def main():
     val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
     
+    if OPTIMIZE:
+        parameter_search(train_data, val_data, loss_fn, input_dim=len(data.columns)-1)
+        return
 
     # train the encoder
     encoder = train_encoder(
