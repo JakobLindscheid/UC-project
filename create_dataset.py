@@ -279,4 +279,4 @@ if __name__ == "__main__":
         full_dataset = pd.concat([full_dataset]+neighbor_datasets, axis=1).fillna(0)
 
 
-    full_dataset.to_csv(f"squares_{CATEGORIES}_cats_{SQUARE_SIZE}m{'_neighbors' if NEIGHBORS else ''}{'_checkins' if CHECK_INS else ''}.csv", index=False)
+    full_dataset.to_csv(f"data/squares_{CATEGORIES}_cats_{SQUARE_SIZE}m{'_neighbors' if NEIGHBORS else ''}{'_checkins' if CHECK_INS else ''}.csv", index=False)

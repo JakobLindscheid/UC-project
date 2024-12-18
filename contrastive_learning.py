@@ -220,7 +220,7 @@ def main():
     loss_fn = SupConLoss(temperature=temperature)
 
     # Load data
-    data = pd.read_csv(f"squares_{CATEGORIES}_cats_{SQUARE_SIZE}m{'_neighbors' if NEIGHBORS else ''}{'_checkins' if CHECK_INS else ''}.csv")
+    data = pd.read_csv(f"data/squares_{CATEGORIES}_cats_{SQUARE_SIZE}m{'_neighbors' if NEIGHBORS else ''}{'_checkins' if CHECK_INS else ''}.csv")
     data = data.loc[:, data.columns[6:]]
 
     dataset = GridDataset(data)
