@@ -1,6 +1,8 @@
 """ Contrastive Learning for Grid Embeddings """
 
+import time
 import numpy as np
+np.random.seed(0)
 import pandas as pd
 from tqdm import tqdm
 from joblib import Parallel, delayed
@@ -13,6 +15,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 import matplotlib.pyplot as plt
 
 import torch
+torch.manual_seed(0)
 from torch import nn
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -76,6 +79,8 @@ class SupConLoss(nn.Module):
         """Compute the supervised contrastive loss"""
         label = (labels[None, :] == labels[:, None]).float()  # <batch_size, batch_size>
         label -= torch.eye(label.size(0))
+        if label.sum() == 0:
+            return None
 
         # Compute cosine similarity
         similarity = nn.functional.cosine_similarity(
@@ -86,9 +91,7 @@ class SupConLoss(nn.Module):
         )  # for each sample keep similarity with positive samples
         divisor = torch.exp(
             (similarity - torch.eye(similarity.size(0))) / self.temperature
-        ).sum(
-            1
-        )  # for each sample sum similarity with all samples
+        ).sum(1)  # for each sample sum similarity with all samples
 
         loss = -torch.log(dividend / divisor).sum() / label.sum()
 
@@ -224,6 +227,8 @@ def train_encoder(
 
                 # Compute loss
                 loss = loss_fn(output, batch_labels)
+                if loss is None:
+                    continue
                 epoch_loss += loss.item()
 
                 # Backward pass
@@ -239,6 +244,8 @@ def train_encoder(
                     for batch_data, batch_labels in val_loader:
                         output = encoder(batch_data)
                         val_loss += loss_fn(output, batch_labels).item()
+                        if loss is None:
+                            continue
                 writer.add_scalar(
                     "encoder/Loss/train", epoch_loss / len(train_loader), epoch
                 )
@@ -253,21 +260,26 @@ def train_encoder(
     return encoder
 
 
-def parameter_search(train_data, val_data, loss_fn, input_dim):
+def parameter_search(train_data, val_data, input_dim):
     """Hyperparameter search"""
-    batch_sizes = [64, 128, 256]
-    embedding_dims = [16, 32, 64]
-    network_structures = [(128, 128, 128), (128, 128), (256, 128, 64), (128, 64), (256, 128)]
-    n_epochs = 500
-    learning_rates = [1e-2, 1e-3, 1e-4]
+    batch_sizes = [64, 128, 256, 512, 1024]
+    embedding_dims = [16, 32, 64, 128, 256]
+    network_structures = [(512, 256), (256,256), (256, 128), (128, 128), (128, 64), (256,256,256), (128, 128, 128), (256, 128, 64)]
+    n_epochs = 200
+    learning_rates = [1e-2, 1e-3, 1e-4] 
+    temperatures = [0.1, 0.5, 1.0]
 
-    def eval_params(batch_size, embedding_dim, encoder_layers, learning_rate):
+    def eval_params(batch_size, embedding_dim, encoder_layers, learning_rate, temperature):
         print(
-            f"Training with batch_size={batch_size}, embedding_dim={embedding_dim}, encoder_layers={encoder_layers}, learning_rate={learning_rate}"
+            f"Training with batch_size={batch_size}, embedding_dim={embedding_dim}, encoder_layers={encoder_layers}, learning_rate={learning_rate}, temperature={temperature}"
         )
+        np.random.seed(0)
+        torch.manual_seed(0)
         
         train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
         val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=True)
+
+        loss_fn = SupConLoss(temperature=temperature)
 
         encoder = train_encoder(
             train_loader,
@@ -307,28 +319,31 @@ def parameter_search(train_data, val_data, loss_fn, input_dim):
             "embedding_dim": embedding_dim,
             "encoder_layers": encoder_layers,
             "learning_rate": learning_rate,
+            "temperature": temperature,
             "score": score,
         }
 
-    results = Parallel(n_jobs=-1)(
-        delayed(eval_params)(batch_size, embedding_dim, encoder_layers, learning_rate)
+    start = time.time()
+    results = [eval_params(batch_size, embedding_dim, encoder_layers, learning_rate, temperature)
         for batch_size in batch_sizes
         for embedding_dim in embedding_dims
         for encoder_layers in network_structures
         for learning_rate in learning_rates
-    )
-    results = pd.DataFrame(results).sort_values("score", ascending=False)
-    print(results)
+        for temperature in temperatures
+    ]
+    results = pd.DataFrame(results)#.sort_values("score", ascending=False)
+    print(f"Elapsed time: {time.time() - start:.2f} seconds")
+    results.to_csv("results.csv", index=False)
 
 
-def main(categories, square_size, check_ins, neighbors, analysis, optimize):
+def main(categories, square_size, check_ins, cities, neighbors, analysis, optimize):
     """Main function"""
 
-    batch_size = 128
-    embedding_dim = 32
-    encoder_layers = (128, 128, 128)
-    n_epochs = 500
-    temperature = 1.0
+    batch_size = 512
+    embedding_dim = 64
+    encoder_layers = (256, 128)
+    n_epochs = 200
+    temperature = 0.5
     learning_rate = 1e-3
 
     # loss_fn = ContrastiveLoss(margin=1.0)
@@ -350,7 +365,7 @@ def main(categories, square_size, check_ins, neighbors, analysis, optimize):
     test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=True)
 
     if optimize:
-        parameter_search(train_data, val_data, loss_fn, input_dim=len(data.columns) - 1)
+        parameter_search(train_data, val_data, input_dim=len(data.columns) - 1)
         return
 
     # train the encoder
@@ -364,6 +379,8 @@ def main(categories, square_size, check_ins, neighbors, analysis, optimize):
         n_epochs=n_epochs,
         learning_rate=learning_rate,
     )
+
+    torch.save(encoder.state_dict(), f"models/encoder_{categories}_cats_{square_size}m{'_neighbors' if neighbors else ''}{'_checkins' if check_ins else ''}{'_'+cities if cities != 'DEFAULT' else ''}.pth")
 
     with torch.no_grad():
         embeddings = torch.tensor([])
@@ -385,6 +402,14 @@ def main(categories, square_size, check_ins, neighbors, analysis, optimize):
         label_mapping = full_loader.dataset.label_mapping.keys()
         tsne_analysis(test_loader, encoder, label_mapping)
         confusion_matrix(predictions, labels, label_mapping)
+
+        with torch.no_grad():
+            embeddings = torch.tensor([])
+            labels = []
+            for batch_data, batch_labels in test_loader:
+                embeddings = torch.cat((embeddings, encoder(batch_data)))
+                labels += batch_labels
+            labels = torch.tensor(labels)
         similarities(embeddings, labels, label_mapping)
 
 
