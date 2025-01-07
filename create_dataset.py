@@ -12,6 +12,7 @@ CATEGORIES = "lvl2"
 SQUARE_SIZE = 1000
 CHECK_INS = False
 NEIGHBORS = False
+CITIES = "WORLD"
 
 if CATEGORIES == "handpicked":
 
@@ -40,29 +41,6 @@ elif CATEGORIES == "lvl2":
     }
 print(len(categories.keys()), " categories")
 
-cities = {
-    "Shanghai": {
-        "city_names": ["Shanghai", "上海"],
-        "shape_file": 'shanghai-provjson.shp',
-    },
-    "Nanjing": {
-        "city_names": ["Nanjing", "南京"],
-        "corner1": (118.39246295229297, 31.261649948659116),
-        "corner2": (119.22570190410435, 32.56306709606652)
-    },
-    "Beijing": {
-        "city_names": ["Beijing", "北京"],
-        "corner1": (115.39783664651948, 39.45697643649945),
-        "corner2": (117.59107359664718, 41.053361082863574), 
-    },
-    "Xi'An": {
-        "city_names": ["Xi''an", "西安"],
-        "corner1": (107.58696095508553, 33.684721810688416),
-        "corner2": (109.828485064734, 34.833361874606794), 
-    }
-}
-print(len(cities.keys()), " cities")
-
 r_earth = 6_371_000 # meters
 def move_lat(lat, d_lat):
     lat += d_lat / r_earth * 180 / np.pi
@@ -71,6 +49,16 @@ def move_long(long, d_long, lat):
     long += d_long / r_earth * 180 / np.pi / np.cos(lat * np.pi / 180)
     return long
 
+def find_city_names(con, lat, long):
+    query_results = con.sql(f"""
+        SELECT locality FROM places 
+        WHERE latitude BETWEEN {lat-0.01} AND {lat+0.01} AND longitude BETWEEN {long-0.01} AND {long+0.01}
+        AND locality IS NOT NULL
+        GROUP BY locality
+        ORDER BY COUNT(*) DESC
+        LIMIT 3;
+    """).df()
+    return query_results["locality"].to_list()
 
 def generate_squares(min_lat, max_lat, min_long, max_long, square_size=500):
     long = min_long
@@ -109,7 +97,7 @@ def query_pois(con, boundaries, categories, city_names=["Shanghai", "上海"]):
     cat_condition = " OR ".join([f"""level{level}_category_name = '{name.replace("'", "''")}'""" for level, name in categories.values()])
     df = con.sql(f"""
             WITH filtered_places AS (
-                SELECT * FROM places WHERE ({" OR ".join(["'" + city_name + "' IN locality" for city_name in city_names])})
+                SELECT * FROM places WHERE ({" OR ".join(["'" + city_name.replace("'","''") + "' IN locality" for city_name in city_names])})
             ), 
             exploded_categories AS (
                 SELECT DISTINCT fsq_place_id
@@ -129,29 +117,26 @@ def query_pois(con, boundaries, categories, city_names=["Shanghai", "上海"]):
     ).df()
     return df
 
-
-def poi_counts(con,  squares, categories, city_names, boundaries):
+def poi_counts(con, squares, categories, city_names, boundaries):
     
     df = query_pois(con, boundaries, categories, city_names)
         
     df["square"] = df.apply(lambda x:
         squares[
-            (squares["min_long"]<= x["longitude"]) & (squares["max_long"]>x["longitude"]) &
-            (squares["min_lat"]<= x["latitude"]) & (squares["max_lat"]>x["latitude"])
+            (squares["min_long"]<=x["longitude"]) & (squares["max_long"]>x["longitude"]) &
+            (squares["min_lat"]<=x["latitude"]) & (squares["max_lat"]>x["latitude"])
         ].index[0], 
     axis=1)
     
+    df["fsq_category_labels"] = df["fsq_category_labels"].astype(str)
     df = df.assign(category="")
-    for cat in tqdm(categories.keys(), desc=city_names[0]):
-        df.loc[
-            df[df["fsq_category_labels"].astype(str).str.contains(categories[cat][1])].index,
-            "category"
-        ] = cat
+    for cat in categories.keys():
+        df.loc[df[df["fsq_category_labels"].str.contains(categories[cat][1])].index,"category"] = cat
     
 
     return df
 
-if __name__ == "__main__":
+def main():
 
     con = duckdb.connect("C:/Users/Public/fsq/fsq.db")
     con.sql(
@@ -161,31 +146,51 @@ if __name__ == "__main__":
         "create TABLE IF NOT EXISTS categories as SELECT * FROM read_parquet( 'C:/Users/Public/fsq/categories.snappy.parquet');"
     )
 
-    full_dataset = []
+    city_df = pd.read_csv("worldcities.csv")
+    if CITIES == "DEFAULT":
+        city_df = city_df[city_df["city_ascii"].isin(["Shanghai", "Nanjing", "Beijing", "Xi'an"])]
+    elif CITIES == "CHINA":
+        city_df = city_df[city_df["country"]=="China"]
+        city_df = city_df.sort_values("population", ascending=False).head(50)
+    elif CITIES == "WORLD":
+        city_df = city_df.sort_values("population", ascending=False)
+        counter = 0
+        country_counter = {}
+        chosen_cities = []
+        for i, row in city_df.iterrows():
+            if counter >= 50:
+                break
+            if row["country"] not in country_counter:
+                country_counter[row["country"]] = 0
+            country_counter[row["country"]] += 1
+            if country_counter[row["country"]] < 5:
+                chosen_cities.append(i)
+                counter += 1
+
+        city_df = city_df.loc[chosen_cities]
+
+    city_df["lat_lower"] = city_df["lat"] - 1
+    city_df["lat_upper"] = city_df["lat"] + 1
+    city_df["lng_lower"] = city_df["lng"] - 1
+    city_df["lng_upper"] = city_df["lng"] + 1
+    cities = {
+        city: {
+            "city_names": find_city_names(con, *city_df[city_df["city"]==city].loc[:,["lat","lng"]].values[0]),
+            "corner1": tuple(city_df[city_df["city"]==city].loc[:,["lng_lower","lat_lower"]].values[0]),
+            "corner2": tuple(city_df[city_df["city"]==city].loc[:,["lng_upper","lat_upper"]].values[0])            
+        } for city in city_df["city"]
+    }
+
+    print(len(cities.keys()), " cities:")
     for city in cities.keys():
+        print(city, ":", cities[city]["city_names"])
+    
+    full_dataset = []
+    for city in tqdm(cities.keys()):
 
         # get the boundaries of the city
-        shape_file = cities[city].get("shape_file")
-        if shape_file:
-            geo_df = gpd.read_file(shape_file)
-
-            polygons = geo_df.geometry.tolist()
-            boundary = gpd.GeoSeries(shapely.ops.unary_union(polygons))
-            long, lat = boundary.at[0].exterior.coords.xy
-
-            min_long = min(long)
-            max_long = max(long)
-            min_lat = min(lat)
-            max_lat = max(lat)
-
-        else:
-            corner1 = cities[city].get("corner1")
-            corner2 = cities[city].get("corner2")
-            if corner1 is None or corner2 is None:
-                raise ValueError("Please provide either a shape file or the top left and bottom right coordinates.")
-            
-            min_long, min_lat = corner1
-            max_long, max_lat = corner2
+        min_long, min_lat = cities[city]["corner1"]
+        max_long, max_lat = cities[city]["corner2"]
         
         # generate the squares
         squares = generate_squares(min_lat, max_lat, min_long, max_long, SQUARE_SIZE)
@@ -279,4 +284,7 @@ if __name__ == "__main__":
         full_dataset = pd.concat([full_dataset]+neighbor_datasets, axis=1).fillna(0)
 
 
-    full_dataset.to_csv(f"data/squares_{CATEGORIES}_cats_{SQUARE_SIZE}m{'_neighbors' if NEIGHBORS else ''}{'_checkins' if CHECK_INS else ''}.csv", index=False)
+    full_dataset.to_csv(f"data/squares_{CATEGORIES}_cats_{SQUARE_SIZE}m{'_neighbors' if NEIGHBORS else ''}{'_checkins' if CHECK_INS else ''}{'_'+CITIES if CITIES != 'DEFAULT' else ''}.csv", index=False)
+
+if __name__ == "__main__":
+    main()

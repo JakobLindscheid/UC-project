@@ -163,8 +163,8 @@ def confusion_matrix(predictions, labels, label_mapping):
     fig, ax = plt.subplots()
     cax = ax.matshow(conf_matrix / conf_matrix.sum(), cmap="YlOrRd")
     fig.colorbar(cax)
-    plt.xticks(ticks=np.arange(4), labels=label_mapping)
-    plt.yticks(ticks=np.arange(4), labels=label_mapping)
+    plt.xticks(ticks=np.arange(len(label_mapping)), labels=label_mapping, rotation=90)
+    plt.yticks(ticks=np.arange(len(label_mapping)), labels=label_mapping)
     ax.set_xlabel("Predicted")
     ax.set_ylabel("True")
     ax.set_title("Confusion Matrix Heatmap")
@@ -185,7 +185,7 @@ def similarities(embeddings, labels, label_mapping):
     plt.figure(figsize=(10, 8))
     plt.imshow(similarity_matrix, cmap="coolwarm", alpha=0.8)
     plt.colorbar()
-    plt.xticks(ticks=np.arange(len(avg_emb.index)), labels=label_mapping)
+    plt.xticks(ticks=np.arange(len(avg_emb.index)), labels=label_mapping, rotation=90)
     plt.yticks(ticks=np.arange(len(avg_emb.index)), labels=label_mapping)
     plt.title("Pairwise Similarities of average embeddings")
     plt.show()
@@ -198,7 +198,7 @@ def train_encoder(
     input_dim,
     embedding_dim=32,
     encoder_layers=(128, 128, 128),
-    n_epochs=500,
+    n_epochs=200,
     learning_rate=1e-3,
     verbose=True,
 ):
@@ -336,7 +336,7 @@ def main(categories, square_size, check_ins, neighbors, analysis, optimize):
 
     # Load data
     data = pd.read_csv(
-        f"data/squares_{categories}_cats_{square_size}m{'_neighbors' if neighbors else ''}{'_checkins' if check_ins else ''}.csv"
+        f"data/squares_{categories}_cats_{square_size}m{'_neighbors' if neighbors else ''}{'_checkins' if check_ins else ''}{'_'+cities if cities != 'DEFAULT' else ''}.csv"
     )
     data = data.loc[:, data.columns[6:]]
 
@@ -394,9 +394,10 @@ if __name__ == "__main__":
     parser.add_argument("--categories", "-c", type=str, default="handpicked", help="Categories for the dataset")
     parser.add_argument("--square_size", "-s", type=int, default=500, help="Square size for the dataset")
     parser.add_argument("--check_ins", "-ci", action="store_true", help="Include check-ins in the dataset")
+    parser.add_argument("--cities", "-cty", type=str, default="DEFAULT", help="Cities for the dataset")
     parser.add_argument("--neighbors", "-n", action="store_true", help="Include neighbors in the dataset")
     parser.add_argument("--analysis", "-a", action="store_true", help="Perform analysis after training")
     parser.add_argument("--optimize", "-o", action="store_true", help="Perform hyperparameter optimization")
     args = parser.parse_args()
 
-    main(args.categories, args.square_size, args.check_ins, args.neighbors, args.analysis, args.optimize)
+    main(args.categories, args.square_size, args.check_ins, args.cities, args.neighbors, args.analysis, args.optimize)
