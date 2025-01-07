@@ -1,11 +1,9 @@
 import numpy as np
 import duckdb
 import pandas as pd
-import shapely
 from tqdm import tqdm
 
 from osgeo import gdal
-import geopandas as gpd
 gdal.SetConfigOption('SHAPE_RESTORE_SHX', 'YES')
 
 CATEGORIES = "lvl2"

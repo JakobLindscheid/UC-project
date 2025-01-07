@@ -5,7 +5,6 @@ import numpy as np
 np.random.seed(0)
 import pandas as pd
 from tqdm import tqdm
-from joblib import Parallel, delayed
 import argparse
 
 from sklearn.manifold import TSNE
@@ -26,7 +25,7 @@ class GridDataset(Dataset):
     def __init__(self, df):
         columns = [c for c in df.columns if c != "label"]
         self.data = df.loc[:, columns].values.astype(np.float32)
-        self.data /= self.data.max(0)
+        self.data /= self.data.max(0) + 1e-6
         self.data = torch.tensor(self.data)
         self.labels = df.loc[:, "label"].values
 
